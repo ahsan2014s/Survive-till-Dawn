@@ -1,2 +1,21 @@
 # Survive-till-Dawn
-Readme Initialization
+## How to run:
+**If on windows**:
+```shell
+git clone https://github.com/ahsan2014s/Survive-till-Dawn.git
+
+cd Survive-till-Dawn
+
+pip install numpy
+
+python3 Survive_till_dawn.py
+```
+**If on Linux**:
+```shell
+git clone https://github.com/ahsan2014s/Survive-till-Dawn.git
+cd Survive-till-Dawn
+python3 -m venv .
+source bin/activate
+pip install numpy
+python3 Survive_till_dawn.py
+```
