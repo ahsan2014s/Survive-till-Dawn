@@ -1,6 +1,8 @@
 # Survive-till-Dawn
 ## How to run:
 **If on windows**:
+If you don't have git for windows installed then download and unzip the file and install numpy using: pip install numpy.
+If you have git for windows installed (or if you want to install: https://git-scm.com/downloads/win):
 ```shell
 git clone https://github.com/ahsan2014s/Survive-till-Dawn.git
 
