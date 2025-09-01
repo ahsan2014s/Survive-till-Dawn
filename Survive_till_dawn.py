@@ -30,7 +30,7 @@ player_rot_speed = 100.0
 camera_pos = np.array([0.0, 0.0, 0.0]); 
 camera_target = np.array([0.0, 0.0, 0.0]); 
 camera_mode = 'THIRD_PERSON'
-camera_third_person_radius = 10.0; 
+camera_third_person_radius = 15.0; 
 camera_third_person_height = 5.0; 
 camera_rot_y = 0.0; 
 camera_pitch = -30.0
@@ -38,13 +38,13 @@ bullets = [];
 enemies = []; 
 targeted_enemies_this_sweep = set() 
 enemy_count = 5; 
-grid_size = 50; 
+grid_size = 100; 
 respawn_delay = 0.35
 key_states = {k: False for k in 'wasdcvk'}; 
 special_key_states = {key: False for key in [100, 101, 102, 103]}
 cheat_mode_active = False; 
 auto_gun_follow_active = False
-SURVIVAL_TIME_SECONDS = 600 # 10 minutes
+SURVIVAL_TIME_SECONDS = 120 # 2 minutes
 time_remaining = SURVIVAL_TIME_SECONDS
 player_won = False
 LIGHT_DIRECTION = np.array([0.0, 1.0, 0.0], dtype=np.float32)
@@ -61,26 +61,35 @@ is_boss_spawned = False
 heal_items = []
 HEAL_AMOUNT = 30.0
 BULLET_DAMAGE = 10
-
+SPAWN_INTERVAL = 10.0 
+time_since_last_spawn = 0.0
+PLAYER_SPAWN_BORDER = 20.0 
+is_player_moving = False
+GUN_OFFSET_RIGHT = -0.8
+GUN_OFFSET_UP = 0.9     
+GUN_OFFSET_FORWARD = 1.2
+CAMERA_COLLISION_STEP = 0.5
+ENEMY_ATTACK_COOLDOWN = 1.0
+GROUND_PATCHES = []
+ENEMY_COLLISION_RADIUS = 1.5 
 OBSTACLES = [
     {
-        'type': 'BOX',
-        'pos': np.array([-20.0, 5.0, -15.0]),
-        'size': np.array([12.0, 10.0, 15.0]) # Width, Height, Depth
+        'type': 'HOUSE', # House
+        'pos': np.array([-20.0, 0.0, -15.0]),
+        'size': np.array([12.0, 10.0, 15.0]) 
     },
     {
-        'type': 'CYLINDER',
+        'type': 'TREE', # Tree
         'pos': np.array([15.0, 0.0, 10.0]),
-        'radius': 2.0,
-        'height': 8.0
+        'radius': 5.0,
+        'height': 15.0
     },
-    # To add a new tree, copy the entry above and change the 'pos'
     {
-        'type': 'CYLINDER',
+        'type': 'TREE', # Tree
         'pos': np.array([-10.0, 0.0, 20.0]),
-        'radius': 2.5,
-        'height': 10.0
-    },
+        'radius': 5.5,
+        'height': 20.0
+    }
 ]
 
 
@@ -103,96 +112,129 @@ def lerp(v0, v1, t):
     return v0 * (1.0 - t) + v1 * t
 
 def draw_player():
-    glPushMatrix() # begin wrap
+    glPushMatrix()
     glTranslatef(player_pos[0], player_pos[1], player_pos[2])
     
     if is_game_over:
         glRotatef(90, 0, 0, 1)
-        glTranslatef(0, 0, 0)
         
     glRotatef(player_rot_y, 0, 1, 0)
+    glRotatef(180, 0, 1, 0)
     quad = gluNewQuadric()
 
-    # BODY
-    apply_phong_shading(np.array([0, 0.8, 0.0]), np.array([1, 0, 0]))
+    walk_cycle_time = time.perf_counter() * 8  
+
+    leg_swing_angle = math.sin(walk_cycle_time) * 35 if is_player_moving else 0
+    arm_swing_angle = math.sin(walk_cycle_time) * 45 if is_player_moving else 0
+    body_lean_angle = 15 if is_player_moving else 0
+
     glPushMatrix()
-    glTranslatef(0, 1.5, 0)
-    glRotatef(90, 1, 0, 0)
-    gluCylinder(quad, 0.5*2, 0.5*2, 3.0, 20, 20) # top rad, bottom rad, height 
+    glRotatef(body_lean_angle, 1, 0, 0)
+
+    # Torso
+    apply_phong_shading(np.array([0.1, 0.4, 0.1]), np.array([1, 0, 0])) 
+    glPushMatrix()
+    glTranslatef(0, 0.5, 0)
+    glScalef(0.7, 1.0, 0.4)
+    glutSolidCube(2.0)
     glPopMatrix()
 
-    # head
-    apply_phong_shading(np.array([0.8, 0.6, 0.4]), np.array([0, 1, 0]))
+    # Head
     glPushMatrix()
-    glTranslatef(0, 0.7*1.22+1.1, 0)
-    glutSolidSphere(0.7*1.22, 20, 20)
-    glPopMatrix()
-
-    # arm and gun together
-    glPushMatrix()
-    glTranslatef(0, 1.2, -.9)
-    glRotatef(90, 1, 0, 0)
+    glTranslatef(0, 1.8, 0)
+    apply_phong_shading(np.array([0.9, 0.7, 0.6]), LIGHT_DIRECTION) # Skin tone
+    glutSolidSphere(0.6, 20, 20)
     
-    # Left Arm
+    # Eyes
+    apply_phong_shading(np.array([0.0, 0.0, 0.0]), LIGHT_DIRECTION) # Black
+    glPushMatrix(); glTranslatef(0.2, 0.1, 0.5); glutSolidSphere(0.08, 10, 10); glPopMatrix() # Right eye
+    glPushMatrix(); glTranslatef(-0.2, 0.1, 0.5); glutSolidSphere(0.08, 10, 10); glPopMatrix() # Left eye
+
+    # Hair
+    apply_phong_shading(np.array([0.2, 0.1, 0.1]), LIGHT_DIRECTION) # Brown hair
     glPushMatrix(); 
-    glTranslatef(-0.7, 0, 0); 
-    glRotatef(-270, 0, 0, 1)
-    glRotatef(-90, 0, 1, 0); 
-    apply_phong_shading(np.array([0.8, 0.6, 0.4]), np.array([0, 1, 0])); 
-    gluCylinder(quad, .16*1.32, .16*1.32, 1.5, 10, 10); 
+    glTranslatef(0, 0.5, 0.1); 
+    glScalef(1.0, 0.8, 1.0); 
+    glutSolidSphere(.85, 15, 15); 
     glPopMatrix()
+    glPopMatrix() # End Head group
 
-    # Right Arm
+    # Left Arm
     glPushMatrix()
-    glTranslatef(0.7, 0, 0)
-    glRotatef(-270, 0, 0, 1)
-    glRotatef(-90, 0, 1, 0); 
-    apply_phong_shading(np.array([0.8, 0.6, 0.4]), np.array([0, 1, 0])); 
-    gluCylinder(quad, .16*1.32, .16*1.32, 1.5, 10, 10); 
-    glPopMatrix()
-
-    # Gun (Centered)
-    glPushMatrix()
-    glTranslatef(0, -1.0, 0)
-    apply_phong_shading(np.array([0.2, 0.2, 0.2]), np.array([0, 0, 1]))
-    glScalef(0.5, 2.0, 0.5)
+    glTranslatef(0.8, 1.0, 0) # Shoulder joint
+    glRotatef(-arm_swing_angle, 1, 0, 0) # Apply walk cycle rotation
+    apply_phong_shading(np.array([0.9, 0.7, 0.6]), LIGHT_DIRECTION) # Skin tone
+    glScalef(0.3, 1.0, 0.3)
     glutSolidCube(1.0)
     glPopMatrix()
-    
-    glPopMatrix() # End of Arms and Gun assembly
 
-    # Legs
-    apply_phong_shading(np.array([0, 0, 0.8]), np.array([0, 1, 0]))
+    # Right Arm and Gun
+    glPushMatrix()
+    glTranslatef(-0.8, 1.0, 0) # Shoulder joint
+    glRotatef(arm_swing_angle, 1, 0, 0) # Apply opposite walk cycle rotation
+    
+    # Arm
+    glPushMatrix()
+    apply_phong_shading(np.array([0.9, 0.7, 0.6]), LIGHT_DIRECTION) # Skin tone
+    glScalef(0.3, 1.0, 0.3)
+    glutSolidCube(1.0)
+    glPopMatrix()
+
+    # Gun Model
+    glTranslatef(0, -0.6, 0.5) # Position gun in hand
+    apply_phong_shading(np.array([0.2, 0.2, 0.2]), LIGHT_DIRECTION)
+    glPushMatrix(); glScalef(0.2, 0.4, 1.5); 
+    glutSolidCube(1.0); glPopMatrix() # Body & Barrel
+    glPushMatrix(); glTranslatef(0, -0.3, -0.2); 
+    glScalef(0.2, 0.4, 0.2); 
+    glutSolidCube(1.0); 
+    glPopMatrix() # Grip
+    glPopMatrix() # End Right Arm and Gun group
+
+    glPopMatrix() # End Upper Body group
+
+    # --- Legs ---
+    apply_phong_shading(np.array([0.1, 0.2, 0.5]), LIGHT_DIRECTION) # Blue pants
+
     # Left Leg
     glPushMatrix()
-    glTranslatef(-0.3, -1.5, 0)
-    glRotatef(90, 1, 0, 0)
-    gluCylinder(quad, 0.52*1.33, 0.2*1.33, 1.5, 10, 10)
+    glTranslatef(-0.4, 0.5, 0) # Hip joint
+    glRotatef(leg_swing_angle, 1, 0, 0) # Apply walk cycle
+    glTranslatef(0, -0.75, 0)
+    glPushMatrix(); glScalef(0.4, 1.5, 0.4); glutSolidCube(1.0); glPopMatrix() # Thigh
+    glTranslatef(0, -0.75, 0)
+    glRotatef(max(0, leg_swing_angle * -0.5), 1, 0, 0) # Knee bend
+    glTranslatef(0, -0.75, 0)
+    glPushMatrix(); glScalef(0.4, 1.5, 0.4); glutSolidCube(1.0); glPopMatrix() # Shin
     glPopMatrix()
 
     # Right Leg
     glPushMatrix()
-    glTranslatef(0.3, -1.5, 0)
-    glRotatef(90, 1, 0, 0)
-    gluCylinder(quad, 0.52*1.33, 0.2*1.33, 1.5, 10, 10)
+    glTranslatef(0.4, 0.5, 0) # Hip joint
+    glRotatef(-leg_swing_angle, 1, 0, 0) # Apply opposite walk cycle
+    glTranslatef(0, -0.75, 0)
+    glPushMatrix(); glScalef(0.4, 1.5, 0.4); glutSolidCube(1.0); glPopMatrix() # Thigh
+    glTranslatef(0, -0.75, 0)
+    glRotatef(max(0, -leg_swing_angle * -0.5), 1, 0, 0) # Knee bend
+    glTranslatef(0, -0.75, 0)
+    glPushMatrix(); glScalef(0.4, 1.5, 0.4); glutSolidCube(1.0); glPopMatrix() # Shin
     glPopMatrix()
 
-
     gluDeleteQuadric(quad)
-    glPopMatrix() # end wrap
+    glPopMatrix()
 
 
 def draw_enemy(enemy):
     if enemy['state'] == 'ALIVE':
         # Arm rotation
-        arm_rotation_angle = (time.perf_counter() * 250) % 360
+        arm_rotation_angle = (time.perf_counter() * 250*4) % 360
 
         total_elapsed_time = time.perf_counter() - game_start_time
         scale = 1.0 + 0.1 * math.sin(total_elapsed_time * 5)
         
         glPushMatrix(); 
         glTranslatef(enemy['pos'][0], enemy['pos'][1], enemy['pos'][2])
-        
+        glRotatef(enemy['rot_y'], 0, 1, 0)
         # Health Bar
         glPushMatrix()
         glTranslatef(0, 2.5, 0)
@@ -221,7 +263,7 @@ def draw_enemy(enemy):
         glutSolidSphere(0.3, 10, 10); 
         glPopMatrix()
 
-        # SPINNING ARMS AND MELEE WEAPONS
+        # spinning ARMS and MELEE WEAPONS
         quad = gluNewQuadric()
         
         # Left Arm
@@ -252,7 +294,7 @@ def draw_enemy(enemy):
         
         gluDeleteQuadric(quad)
         
-        glPopMatrix() # Final pop for the entire enemy
+        glPopMatrix() 
 
 
 def draw_bullet(bullet):
@@ -263,47 +305,46 @@ def draw_bullet(bullet):
     glPopMatrix()
 
 
-
 def draw_grid_and_boundaries():
-    glPushMatrix();
-    ground_normal = np.array([0.0, 1.0, 0.0])
-    
+    glPushMatrix()
+    ground_normal = np.array([0.5, 0.35, 0.05])
+    apply_phong_shading(np.array([0.2, 0.2, 0.1]), ground_normal)
     glBegin(GL_QUADS)
-    
-    # Top-left quadrant (White)
-    apply_phong_shading(np.array([1.0, 1.0, 1.0]), ground_normal)
-    glVertex3f(-grid_size, 0, grid_size); glVertex3f(0, 0, grid_size); glVertex3f(0, 0, 0); glVertex3f(-grid_size, 0, 0)
-    
-    # Top-right quadrant (Purple)
-    apply_phong_shading(np.array([0.5, 0.2, 0.8]), ground_normal)
-    glVertex3f(0, 0, grid_size); glVertex3f(grid_size, 0, grid_size); glVertex3f(grid_size, 0, 0); glVertex3f(0, 0, 0)
-
-    # Bottom-left quadrant (Purple)
-    apply_phong_shading(np.array([0.5, 0.2, 0.8]), ground_normal)
-    glVertex3f(-grid_size, 0, 0); glVertex3f(0, 0, 0); glVertex3f(0, 0, -grid_size); glVertex3f(-grid_size, 0, -grid_size)
-
-    # Bottom-right quadrant (White)
-    apply_phong_shading(np.array([1.0, 1.0, 1.0]), ground_normal)
-    glVertex3f(0, 0, 0); glVertex3f(grid_size, 0, 0); glVertex3f(grid_size, 0, -grid_size); glVertex3f(0, 0, -grid_size)
-    
+    glVertex3f(-grid_size, 0, -grid_size)
+    glVertex3f(grid_size, 0, -grid_size)
+    glVertex3f(grid_size, 0, grid_size)
+    glVertex3f(-grid_size, 0, grid_size)
     glEnd()
 
-    wall_height = 5
-    glColor3f(0.0, 1.0, 0.0); 
+    for patch in GROUND_PATCHES:
+        glPushMatrix()
+        glTranslatef(patch['pos'][0], patch['pos'][1], patch['pos'][2])
+        glRotatef(patch['angle'], 0, 1, 0)
+        apply_phong_shading(patch['color'][:3], ground_normal) 
+        glColor3f(patch['color'][0], patch['color'][1], patch['color'][2])
+        half_size = patch['size'] / 2
+        glBegin(GL_QUADS)
+        glVertex3f(-half_size, 0, -half_size)
+        glVertex3f(half_size, 0, -half_size)
+        glVertex3f(half_size, 0, half_size)
+        glVertex3f(-half_size, 0, half_size)
+        glEnd()
+        glPopMatrix()
+
+    wall_height = 50
+    glColor3f(0.1, 0.1, 0.1); 
     glBegin(GL_QUADS); 
     glVertex3f(-grid_size, 0, grid_size); 
     glVertex3f(grid_size, 0, grid_size); 
     glVertex3f(grid_size, wall_height, grid_size); 
     glVertex3f(-grid_size, wall_height, grid_size); 
     glEnd()
-    glColor3f(0.0, 0.0, 1.0); 
     glBegin(GL_QUADS); 
     glVertex3f(-grid_size, 0, -grid_size); 
     glVertex3f(grid_size, 0, -grid_size); 
     glVertex3f(grid_size, wall_height, -grid_size); 
     glVertex3f(-grid_size, wall_height, -grid_size); 
     glEnd()
-    glColor3f(0.0, 1.0, 1.0); 
     glBegin(GL_QUADS); 
     glVertex3f(grid_size, 0, -grid_size); 
     glVertex3f(grid_size, 0, grid_size); 
@@ -318,79 +359,145 @@ def draw_grid_and_boundaries():
     glEnd(); 
     glPopMatrix()
 
-
 def draw_obstacles():
-    """
-    Draws all static obstacles defined in the global obstacle list,
-    with full Phong shading applied.
-    """
     quad = gluNewQuadric() 
 
     for obs in OBSTACLES:
         glPushMatrix()
-        
         glTranslatef(obs['pos'][0], obs['pos'][1], obs['pos'][2])
 
-        if obs['type'] == 'BOX':
-            base_color = np.array([0.8, 0.7, 0.5])
+        if obs['type'] == 'HOUSE': 
+            base_color = np.array([0.8, 0.7, 0.5]) # Beige walls
             w, h, d = obs['size'][0]/2.0, obs['size'][1], obs['size'][2]/2.0
             
-            glBegin(GL_QUADS)
-            apply_phong_shading(base_color, [0, 0, 1]); glVertex3f(-w, -h, d); glVertex3f(w, -h, d); glVertex3f(w, h, d); glVertex3f(-w, h, d)
-            # Back Face
-            apply_phong_shading(base_color, [0, 0, -1]); glVertex3f(-w, -h, -d); glVertex3f(-w, h, -d); glVertex3f(w, h, -d); glVertex3f(w, -h, -d)
-            # Top Face
-            apply_phong_shading(base_color, [0, 1, 0]); glVertex3f(-w, h, -d); glVertex3f(-w, h, d); glVertex3f(w, h, d); glVertex3f(w, h, -d)
-            # Bottom Face
-            apply_phong_shading(base_color, [0, -1, 0]); glVertex3f(-w, -h, -d); glVertex3f(w, -h, -d); glVertex3f(w, -h, d); glVertex3f(-w, -h, d)
-            # Right Face
-            apply_phong_shading(base_color, [1, 0, 0]); glVertex3f(w, -h, -d); glVertex3f(w, h, -d); glVertex3f(w, h, d); glVertex3f(w, -h, d)
-            # Left Face
-            apply_phong_shading(base_color, [-1, 0, 0]); glVertex3f(-w, -h, -d); glVertex3f(-w, -h, d); glVertex3f(w, h, d); glVertex3f(-w, h, -d)
+            # Walls 
+            glBegin(GL_QUADS); 
+            apply_phong_shading(base_color, [0, 0, 1]); 
+            glVertex3f(-w, 0, d); 
+            glVertex3f(w, 0, d); 
+            glVertex3f(w, h, d); 
+            glVertex3f(-w, h, d); 
+            glEnd()
+            glBegin(GL_QUADS); 
+            apply_phong_shading(base_color, [0, 0, -1]); 
+            glVertex3f(-w, 0, -d); 
+            glVertex3f(-w, h, -d); 
+            glVertex3f(w, h, -d); 
+            glVertex3f(w, 0, -d); glEnd()
+            glBegin(GL_QUADS); 
+            apply_phong_shading(base_color, [0, 1, 0]); 
+            glVertex3f(-w, h, -d); 
+            glVertex3f(-w, h, d); 
+            glVertex3f(w, h, d); 
+            glVertex3f(w, h, -d); glEnd()
+            glBegin(GL_QUADS); 
+            apply_phong_shading(base_color, [0, -1, 0]); 
+            glVertex3f(-w, 0, -d); 
+            glVertex3f(w, 0, -d); 
+            glVertex3f(w, 0, d); 
+            glVertex3f(-w, 0, d); glEnd()
+            glBegin(GL_QUADS); 
+            apply_phong_shading(base_color, [1, 0, 0]); 
+            glVertex3f(w, 0, -d); 
+            glVertex3f(w, h, -d); 
+            glVertex3f(w, h, d); 
+            glVertex3f(w, 0, d); 
+            glEnd()
+            glBegin(GL_QUADS); 
+            apply_phong_shading(base_color, [-1, 0, 0]); 
+            glVertex3f(-w, 0, -d); 
+            glVertex3f(-w, 0, d); 
+            glVertex3f(-w, h, d); 
+            glVertex3f(-w, h, -d); 
             glEnd()
 
-            roof_color = np.array([0.6, 0.2, 0.2])
+            # Roof
+            roof_color = np.array([0.6, 0.2, 0.2]); 
             roof_height = 6.0
-            
-            p_fr = np.array([w, h, d]); p_fl = np.array([-w, h, d]); p_br = np.array([w, h, -d]); p_bl = np.array([-w, h, -d])
+            p_fr = np.array([w, h, d]); 
+            p_fl = np.array([-w, h, d]); 
+            p_br = np.array([w, h, -d]); 
+            p_bl = np.array([-w, h, -d]); 
             p_peak = np.array([0, h + roof_height, 0])
+            apply_phong_shading(roof_color, np.cross(p_br - p_fr, p_peak - p_fr), True); 
+            glBegin(GL_QUADS); 
+            glVertex3fv(p_fr); 
+            glVertex3fv(p_br); 
+            glVertex3fv(p_peak); 
+            glVertex3fv(p_peak); 
+            glEnd()
+            apply_phong_shading(roof_color, np.cross(p_fl - p_bl, p_peak - p_bl), True); 
+            glBegin(GL_QUADS); 
+            glVertex3fv(p_bl); 
+            glVertex3fv(p_fl); 
+            glVertex3fv(p_peak); 
+            glVertex3fv(p_peak); 
+            glEnd()
 
-            v1 = p_br - p_fr; v2 = p_peak - p_fr
-            roof_normal_right = np.cross(v1, v2)
-            apply_phong_shading(roof_color, roof_normal_right, is_shiny=True)
-            glBegin(GL_QUADS); glVertex3fv(p_fr); glVertex3fv(p_br); glVertex3fv(p_peak); glVertex3fv(p_peak); glEnd()
-
-            v1 = p_fl - p_bl; v2 = p_peak - p_bl
-            roof_normal_left = np.cross(v1, v2)
-            apply_phong_shading(roof_color, roof_normal_left, is_shiny=True)
-            glBegin(GL_QUADS); glVertex3fv(p_bl); glVertex3fv(p_fl); glVertex3fv(p_peak); glVertex3fv(p_peak); glEnd()
-
-            apply_phong_shading(roof_color, [0, 0, 1])
-            glBegin(GL_TRIANGLES); glVertex3fv(p_fl); glVertex3fv(p_fr); glVertex3fv(p_peak); glEnd()
-            apply_phong_shading(roof_color, [0, 0, -1])
-            glBegin(GL_TRIANGLES); glVertex3fv(p_br); glVertex3fv(p_bl); glVertex3fv(p_peak); glEnd()
-
-        elif obs['type'] == 'CYLINDER':
-            light_dir_xz = np.array([LIGHT_DIRECTION[0], 0, LIGHT_DIRECTION[2]])
-            norm = np.linalg.norm(light_dir_xz)
-            trunk_normal = light_dir_xz / norm if norm > 0.001 else np.array([1, 0, 0])
+            apply_phong_shading(roof_color, [0, 0, 1]); 
+            glBegin(GL_TRIANGLES); 
+            glVertex3fv(p_fl); 
+            glVertex3fv(p_fr); 
+            glVertex3fv(p_peak); 
+            glEnd()
+            apply_phong_shading(roof_color, [0, 0, -1]); 
+            glBegin(GL_TRIANGLES); 
+            glVertex3fv(p_br); 
+            glVertex3fv(p_bl); 
+            glVertex3fv(p_peak); 
+            glEnd()
             
-            apply_phong_shading(np.array([0.5, 0.35, 0.05]), trunk_normal)
+            # Door
+            apply_phong_shading(np.array([0.4, 0.2, 0.1]), [0, 0, 1])
+            glPushMatrix(); 
+            glTranslatef(0, 0, d + 0.01); 
+            glScalef(6.0, 16.0, 0.1); 
+            glutSolidCube(1.0); 
+            glPopMatrix()
+            # Window
+            apply_phong_shading(np.array([0.1, 0.2, 0.4]), [0, 0, 1])
+            glPushMatrix(); 
+            glTranslatef(3.0, d + 0.01, 5.0); 
+            glScalef(1.5, 1.5, 0.1); 
+            glutSolidCube(1.0); 
+            glPopMatrix()
+            # Chimney
+            apply_phong_shading(np.array([0.5, 0.1, 0.1]), [1, 0, 0])
+            glPushMatrix(); 
+            glTranslatef(w - 1, h + roof_height/2, 0); 
+            glScalef(1, 4, 1); 
+            glutSolidCube(1.0); glPopMatrix()
+
+        elif obs['type'] == 'TREE': 
+            apply_phong_shading(np.array([0.5, 0.35, 0.05]), [1, 0, 0]) 
             glPushMatrix()
             glRotatef(-90, 1, 0, 0)
-            gluCylinder(quad, obs['radius'], obs['radius'], obs['height'], 20, 20)
+            gluCylinder(quad, obs['radius'], obs['radius'] * 0.8, obs['height'], 20, 20)
             glPopMatrix()
 
-            canopy_radius = obs['radius'] * 3.5 
+            canopy_base_y = obs['height']
             apply_phong_shading(np.array([0.1, 0.5, 0.1]), LIGHT_DIRECTION, is_shiny=True)
-            glPushMatrix()
-            glTranslatef(0, obs['height'] + canopy_radius - 1, 0) 
-            glutSolidSphere(canopy_radius, 30, 30)
+            glPushMatrix(); 
+            glTranslatef(0, canopy_base_y, 0); 
+            glutSolidSphere(obs['radius'] * 2.0, 15, 15); 
             glPopMatrix()
+            glPushMatrix(); 
+            glTranslatef(obs['radius'], canopy_base_y, 0); 
+            glutSolidSphere(obs['radius'] * 1.8, 15, 15); 
+            glPopMatrix()
+            glPushMatrix(); 
+            glTranslatef(-obs['radius'], canopy_base_y, 0); 
+            glutSolidSphere(obs['radius'] * 1.5, 15, 15); 
+            glPopMatrix()
+            glPushMatrix(); 
+            glTranslatef(0, canopy_base_y + obs['radius'], 0); 
+            glutSolidSphere(obs['radius'] * 1.9, 15, 15); 
+            glPopMatrix()
+
 
         glPopMatrix()
     
-    gluDeleteQuadric(quad) 
+    gluDeleteQuadric(quad)
 
 
 def draw_hud():
@@ -429,19 +536,13 @@ def draw_hud():
     if is_free_camera_active:
         glColor3f(1.0, 0.8, 0.0)
         draw_text(window_width - 150, 10, "Free Camera (K)")
-    
-    # --- HEALTH BAR FIX: Using the User's "Segmented Bar" Logic ---
+
     health_bar_width = 200
     health_bar_height = 15
     health_bar_x = 10
     health_bar_y = window_height - 70
 
-    # 1. Calculate the width of the current (green) health portion.
-    #    The 'max(0, ...)' ensures the width doesn't become negative if health drops below zero.
     current_health_width = health_bar_width * (max(0, player_health) / MAX_PLAYER_HEALTH)
-
-    # 2. Draw the GREEN portion of the bar, representing remaining health.
-    #    This is drawn from the left edge up to the calculated width.
     if current_health_width > 0:
         glColor3f(0.0, 1.0, 0.0)
         glBegin(GL_QUADS)
@@ -451,10 +552,8 @@ def draw_hud():
         glVertex2f(health_bar_x, health_bar_y - health_bar_height)
         glEnd()
 
-    # 3. Draw the RED portion of the bar, representing lost health.
-    #    This is drawn immediately to the right of the green portion.
     if current_health_width < health_bar_width:
-        # The starting X position for the red bar is the ending X of the green bar.
+
         red_bar_start_x = health_bar_x + current_health_width
         
         glColor3f(1.0, 0.0, 0.0)
@@ -465,7 +564,6 @@ def draw_hud():
         glVertex2f(red_bar_start_x, health_bar_y - health_bar_height)
         glEnd()
     
-    # Restore matrices
     glMatrixMode(GL_PROJECTION); 
     glPopMatrix(); 
     glMatrixMode(GL_MODELVIEW); 
@@ -494,19 +592,65 @@ def draw_heal_items():
         glutSolidSphere(0.7, 15, 15)
         glPopMatrix()
 
-# game logic 
+
 def fire_bullet():
     if is_game_over: 
         return
-    dir_x, dir_z = get_vector_from_angle(player_rot_y); 
-    spawn_dist = 2.5
-    start_pos = [player_pos[0] + dir_x * spawn_dist, 4.0, player_pos[2] + dir_z * spawn_dist]
-    bullets.append(
-        {'pos': np.array(start_pos), 
-        'vel': np.array([dir_x * 40.0, 0, dir_z * 40.0])})
+
+    dir_x, dir_z = get_vector_from_angle(player_rot_y)
+    right_x = dir_z
+    right_z = -dir_x
+
+    start_pos_x = player_pos[0]
+    start_pos_z = player_pos[2]
+
+    start_pos_x += right_x * GUN_OFFSET_RIGHT
+    start_pos_z += right_z * GUN_OFFSET_RIGHT
+    
+    start_pos_x += dir_x * GUN_OFFSET_FORWARD
+    start_pos_z += dir_z * GUN_OFFSET_FORWARD
+
+    start_pos_y = player_pos[1] + GUN_OFFSET_UP
+
+    start_pos = [start_pos_x, start_pos_y, start_pos_z]
+    bullets.append({
+        'pos': np.array(start_pos), 
+        'vel': np.array([dir_x * 40.0, 0, dir_z * 40.0])
+    })
+
+def generate_ground_patches():
+    """Creates a list of randomized quads to simulate a natural ground texture."""
+    global GROUND_PATCHES
+    GROUND_PATCHES.clear()
+    patch_colors = [
+        np.array([0.1, 0.3, 0.1, 0.6]),
+        np.array([0.2, 0.4, 0.1, 0.5]), 
+        np.array([0.3, 0.2, 0.1, 0.4])  
+    ]
+    for _ in range(40):
+        patch = {
+            'pos': np.array([random.uniform(-grid_size, grid_size), 0.1, random.uniform(-grid_size, grid_size)]),
+            'size': random.uniform(10, 25),
+            'angle': random.uniform(0, 360),
+            'color': random.choice(patch_colors)
+        }
+        GROUND_PATCHES.append(patch)
 
 
 def respawn_enemy(enemy):
+    while True:
+        spawn_x = random.uniform(-grid_size + 2, grid_size - 2)
+        spawn_z = random.uniform(-grid_size + 2, grid_size - 2)
+
+        if is_position_colliding(spawn_x, spawn_z, 1.5): 
+            continue 
+
+        dist_to_player = math.sqrt((player_pos[0] - spawn_x)**2 + (player_pos[2] - spawn_z)**2)
+        if dist_to_player < PLAYER_SPAWN_BORDER:
+            continue 
+
+        enemy['pos'] = np.array([spawn_x, 1.0, spawn_z])
+        break
     enemy['max_health'] *= 1.01
     # reset the enemy's current health
     enemy['health'] = enemy['max_health']
@@ -514,25 +658,52 @@ def respawn_enemy(enemy):
     enemy['pos'] = np.array([random.uniform(-grid_size + 2, grid_size - 2), 1.0, random.uniform(-grid_size + 2, grid_size - 2)])
 
 
+def spawn_new_enemy():
+    global enemies
+    print(f"Spawning new enemy! Total count: {len(enemies) + 1}")
+    new_enemy = {
+        'pos': np.array([0.0, 1.0, 0.0]), 
+        'speed': random.uniform(2.0, 4.0), 
+        'state': 'ALIVE', 
+        'death_time': 0,
+        'health': 50.0,
+        'max_health': 50.0,
+        'rot_y': 0.0,
+        'last_attack_time': 0.0
+    }
+    respawn_enemy(new_enemy) 
+    enemies.append(new_enemy)
+
 def update_camera_smooth(dt):
     global camera_pos, camera_target, camera_rot_y, camera_pitch, camera_third_person_height
     
     if camera_mode == 'THIRD_PERSON':
         angle_to_use = camera_rot_y if is_free_camera_active else player_rot_y
         angle_rad = math.radians(angle_to_use)
-        
-        # --- CAMERA FIX: Changed '-' to '+' to place camera behind the player ---
-        cam_x = player_pos[0] + camera_third_person_radius * math.sin(angle_rad)
-        cam_z = player_pos[2] + camera_third_person_radius * math.cos(angle_rad)
-        cam_y = player_pos[1] + camera_third_person_height
-        
-        target_cam_pos = np.array([cam_x, cam_y, cam_z])
-        target_look_at = np.array([player_pos[0], player_pos[1], player_pos[2]])   
-        
-        transition_speed = 7.5 * dt
+        ideal_cam_x = player_pos[0] + camera_third_person_radius * math.sin(angle_rad)
+        ideal_cam_z = player_pos[2] + camera_third_person_radius * math.cos(angle_rad)
+        ideal_cam_y = player_pos[1] + camera_third_person_height
+        ideal_cam_pos = np.array([ideal_cam_x, ideal_cam_y, ideal_cam_z])
+        player_head_pos = player_pos + np.array([0, 1.5, 0])
+        cam_vector = ideal_cam_pos - player_head_pos
+        cam_distance = np.linalg.norm(cam_vector)
+        cam_direction = cam_vector / cam_distance if cam_distance > 0 else np.array([0,0,1])
+        corrected_cam_pos = ideal_cam_pos 
+        current_step = CAMERA_COLLISION_STEP
+        while current_step < cam_distance:
+            test_point = player_head_pos + cam_direction * current_step
+            if is_camera_colliding(test_point):
+                corrected_cam_pos = player_head_pos + cam_direction * (current_step - CAMERA_COLLISION_STEP)
+                break 
+            current_step += CAMERA_COLLISION_STEP
+
+        target_cam_pos = corrected_cam_pos
+        target_look_at = np.array([player_pos[0], player_pos[1] + 1.0, player_pos[2]]) 
+        transition_speed = 15.0 * dt 
         camera_pos = lerp(camera_pos, target_cam_pos, transition_speed)
         camera_target = lerp(camera_target, target_look_at, transition_speed)
-    else: # FIRST_PERSON
+
+    else: 
         dir_x, dir_z = get_vector_from_angle(player_rot_y)
         eye_y = player_pos[1] + 1.6
         eye_offset = 1.8
@@ -540,24 +711,21 @@ def update_camera_smooth(dt):
         eye_z = player_pos[2] + dir_z * eye_offset
         camera_pos = np.array([eye_x, eye_y, eye_z])
         camera_target = np.array([eye_x + dir_x * 5, eye_y, eye_z + dir_z * 5])
-
     if camera_mode == 'THIRD_PERSON':
         if is_free_camera_active:
             if special_key_states[GLUT_KEY_LEFT]: 
                 camera_rot_y -= player_rot_speed * 0.7 * dt
             if special_key_states[GLUT_KEY_RIGHT]: 
                 camera_rot_y += player_rot_speed * 0.7 * dt
-        
         if special_key_states[GLUT_KEY_UP]: 
             camera_third_person_height = min(40.0, camera_third_person_height + player_rot_speed * 0.5 * dt)
         if special_key_states[GLUT_KEY_DOWN]: 
             camera_third_person_height = max(5.0, camera_third_person_height - player_rot_speed * 0.5 * dt)
 
-
 def is_position_colliding(x, z, radius):
     """Checks if a given 2D position is inside ANY obstacle in the global list."""
     for obs in OBSTACLES:
-        if obs['type'] == 'BOX':
+        if obs['type'] == 'HOUSE':
             half_w = obs['size'][0] / 2.0
             half_d = obs['size'][2] / 2.0
             if (obs['pos'][0] - half_w < x + radius and
@@ -566,12 +734,12 @@ def is_position_colliding(x, z, radius):
                 obs['pos'][2] + half_d > z - radius):
                 return True
         
-        elif obs['type'] == 'CYLINDER':
+        elif obs['type'] == 'TREE':
             dist_sq = (x - obs['pos'][0])**2 + (z - obs['pos'][2])**2
             if dist_sq < (obs['radius'] + radius)**2:
                 return True
-
     return False
+
 
 def is_bullet_colliding(bullet_pos):
     """Checks if a given 3D bullet position is inside ANY obstacle."""
@@ -592,38 +760,73 @@ def is_bullet_colliding(bullet_pos):
 
     return False
 
+def is_camera_colliding(pos):
+    if abs(pos[0]) >= grid_size - 1 or abs(pos[2]) >= grid_size - 1:
+        return True
+    if is_position_colliding(pos[0], pos[2], 0.2): 
+        return True
+    return False
+
+def is_colliding_with_enemy(x, z, radius):
+    """Checks if a given 2D position is colliding with ANY alive enemy."""
+    for enemy in enemies:
+        if enemy['state'] == 'ALIVE':
+            dist_sq = (x - enemy['pos'][0])**2 + (z - enemy['pos'][2])**2
+            if dist_sq < (radius + ENEMY_COLLISION_RADIUS)**2:
+                return True 
+    return False
 
 def update_player(dt):
-    global player_pos, player_rot_y
-    if is_game_over: return
-    if key_states['a']: 
-        player_rot_y += player_rot_speed * dt
-    if key_states['d']: 
-        player_rot_y -= player_rot_speed * dt
-    
+    global player_pos, player_rot_y, is_player_moving
+    if is_game_over:
+        is_player_moving = False
+        return
+
+    if key_states['a']: player_rot_y += player_rot_speed * dt
+    if key_states['d']: player_rot_y -= player_rot_speed * dt
     move_dir = 0
-    if key_states['w']: 
-        move_dir = 1
-    if key_states['s']: 
-        move_dir = -1
+    if key_states['w']: move_dir = 1
+    if key_states['s']: move_dir = -1
+    is_player_moving = (move_dir != 0)
         
-    if move_dir != 0:
+    if is_player_moving:
         dir_x, dir_z = get_vector_from_angle(player_rot_y)
         player_radius = 1.0
-        next_pos_x = player_pos[0] + dir_x * player_speed * move_dir * dt
-        next_pos_z = player_pos[2] + dir_z * player_speed * move_dir * dt
+        delta_x = dir_x * player_speed * move_dir * dt
+        delta_z = dir_z * player_speed * move_dir * dt
 
-        if is_position_colliding(next_pos_x, player_pos[2], player_radius):
-            next_pos_x = player_pos[0]
-        if is_position_colliding(player_pos[0], next_pos_z, player_radius):
-            next_pos_z = player_pos[2]
-            
-        player_pos[0] = next_pos_x
-        player_pos[2] = next_pos_z
+        if is_position_colliding(player_pos[0] + delta_x, player_pos[2], player_radius):
+            delta_x = 0
+        
+        if is_position_colliding(player_pos[0] + delta_x, player_pos[2] + delta_z, player_radius):
+            delta_z = 0
+
+        player_pos[0] += delta_x
+        player_pos[2] += delta_z
+
+        for enemy in enemies:
+            if enemy['state'] == 'ALIVE':
+
+                vec_to_player_x = player_pos[0] - enemy['pos'][0]
+                vec_to_player_z = player_pos[2] - enemy['pos'][2]
+                
+                dist_sq = vec_to_player_x**2 + vec_to_player_z**2
+                min_dist_sq = (player_radius + ENEMY_COLLISION_RADIUS)**2
+                
+
+                if dist_sq < min_dist_sq and dist_sq > 0:
+                    dist = math.sqrt(dist_sq)
+
+                    penetration_depth = (player_radius + ENEMY_COLLISION_RADIUS) - dist
+
+                    push_direction_x = vec_to_player_x / dist
+                    push_direction_z = vec_to_player_z / dist
+
+                    player_pos[0] += push_direction_x * penetration_depth
+                    player_pos[2] += push_direction_z * penetration_depth
 
         player_pos[0] = max(-grid_size+1, min(grid_size-1, player_pos[0]))
         player_pos[2] = max(-grid_size+1, min(grid_size-1, player_pos[2]))
-
 
 def update_bullets(dt):
     global bullets_missed
@@ -647,23 +850,33 @@ def update_enemies(dt):
     current_time = time.perf_counter() - game_start_time
     for e in enemies:
         if e['state'] == 'ALIVE' and not is_game_over:
+            original_pos = e['pos'].copy()
             enemy_radius = 1.0
             vec_to_player = np.array([player_pos[0], 0, player_pos[2]]) - np.array([e['pos'][0], 0, e['pos'][2]])
             dist_to_player = np.linalg.norm(vec_to_player)
             
-            if dist_to_player > 0.1:
-                direction = vec_to_player / dist_to_player
-                next_pos_x = e['pos'][0] + direction[0] * e['speed'] * dt
-                next_pos_z = e['pos'][2] + direction[2] * e['speed'] * dt
-                
-                if not is_position_colliding(next_pos_x, next_pos_z, enemy_radius):
-                    e['pos'][0] = next_pos_x
-                    e['pos'][2] = next_pos_z
+            if dist_to_player > 1.5:
+                ideal_direction = vec_to_player / dist_to_player
+                move_vector = ideal_direction * e['speed'] * dt
+                next_pos_ideal = e['pos'] + move_vector
+
+                if not is_position_colliding(next_pos_ideal[0], next_pos_ideal[2], enemy_radius):
+                    e['pos'] = next_pos_ideal
                 else:
-                    if not is_position_colliding(next_pos_x, e['pos'][2], enemy_radius):
-                         e['pos'][0] = next_pos_x
-                    elif not is_position_colliding(e['pos'][0], next_pos_z, enemy_radius):
-                         e['pos'][2] = next_pos_z
+                    left_probe_dir = np.array([-ideal_direction[2], 0, ideal_direction[0]])
+                    right_probe_dir = np.array([ideal_direction[2], 0, -ideal_direction[0]])
+                    next_pos_left = e['pos'] + left_probe_dir * e['speed'] * dt
+                    
+                    if not is_position_colliding(next_pos_left[0], next_pos_left[2], enemy_radius):
+                        e['pos'] = next_pos_left
+                    else:
+                        next_pos_right = e['pos'] + right_probe_dir * e['speed'] * dt
+                        if not is_position_colliding(next_pos_right[0], next_pos_right[2], enemy_radius):
+                            e['pos'] = next_pos_right
+
+            movement_vector = e['pos'] - original_pos
+            if np.linalg.norm(movement_vector) > 0.01:
+                e['rot_y'] = math.degrees(math.atan2(movement_vector[0], movement_vector[2]))
 
         elif e['state'] == 'DEAD':
             if current_time - e['death_time'] > respawn_delay:
@@ -699,30 +912,36 @@ def update_cheat_mode(dt):
 def update_lighting():
     global LIGHT_DIRECTION, LIGHT_COLOR, AMBIENT_COLOR
 
-    time_of_day_cycle = 1.0 - (time_remaining / SURVIVAL_TIME_SECONDS)
-    
-    is_dawn = time_remaining < 120
-    
+    time_of_day_cycle = 1.0 - (max(0, time_remaining) / SURVIVAL_TIME_SECONDS)
     angle = time_of_day_cycle * math.pi 
     LIGHT_DIRECTION = np.array([math.cos(angle), math.sin(angle), -0.5], dtype=np.float32)
     LIGHT_DIRECTION /= np.linalg.norm(LIGHT_DIRECTION)
 
-    color_noon = np.array([1.0, 1.0, 0.85]); color_sunset = np.array([1.0, 0.4, 0.2])
-    color_night = np.array([0.2, 0.3, 0.5]); color_dawn = np.array([1.0, 0.6, 0.4])
-    ambient_noon = np.array([0.3, 0.3, 0.3]); ambient_night = np.array([0.05, 0.05, 0.1])
+    color_sunset = np.array([1.0, 0.4, 0.2])
+    color_night = np.array([0.2, 0.3, 0.5]) # Moonlight
+    color_dawn = np.array([1.0, 0.6, 0.4])
+
+    ambient_day = np.array([0.3, 0.3, 0.3])
+    ambient_night = np.array([0.05, 0.05, 0.1])
     
-    if is_dawn:
-        dawn_factor = (120 - time_remaining) / 120.0
-        LIGHT_COLOR = lerp(color_night, color_dawn, dawn_factor)
-        AMBIENT_COLOR = lerp(ambient_night, ambient_noon, dawn_factor)
-    elif time_of_day_cycle < 0.5:
-        factor = time_of_day_cycle * 2.0
-        LIGHT_COLOR = lerp(color_noon, color_sunset, factor)
-        AMBIENT_COLOR = ambient_noon
-    else:
-        factor = (time_of_day_cycle - 0.5) * 2.0
+    
+    # Phase 1: Dusk (0% to 50% of the game)
+    if time_of_day_cycle < 0.5:
+
+        factor = time_of_day_cycle / 0.5 
         LIGHT_COLOR = lerp(color_sunset, color_night, factor)
-        AMBIENT_COLOR = lerp(ambient_noon, ambient_night, factor)
+        AMBIENT_COLOR = lerp(ambient_day, ambient_night, factor)
+
+    # Deep Night (50% to 80% of the game)
+    elif time_of_day_cycle < 0.8:
+        LIGHT_COLOR = color_night
+        AMBIENT_COLOR = ambient_night
+        
+    #  Dawn (80% to 100% of the game)
+    else:
+        factor = (time_of_day_cycle - 0.8) / 0.2
+        LIGHT_COLOR = lerp(color_night, color_dawn, factor)
+        AMBIENT_COLOR = lerp(ambient_night, ambient_day, factor)
 
     if LIGHT_DIRECTION[1] < 0:
         LIGHT_COLOR *= 0.3
@@ -756,46 +975,38 @@ def check_collisions():
     if is_game_over: 
         return
     
-    current_time = time.perf_counter() - game_start_time
+    current_game_time = time.perf_counter() - game_start_time
     bullets_after_hits = []
     for b in bullets:
         hit = False
         for e in enemies:
             if e['state'] == 'ALIVE' and math.sqrt((b['pos'][0] - e['pos'][0])**2 + (b['pos'][2] - e['pos'][2])**2) < 1.3:
                 e['health'] -= BULLET_DAMAGE
-                
                 if e['health'] <= 0:
                     game_score += 10
                     e['state'] = 'DEAD'
-                    e['death_time'] = current_time
+                    e['death_time'] = current_game_time
                     if e.get('type') == 'BOSS':
                         heal_items.append({'pos': e['pos'].copy()})
-                
                 hit = True
                 break
-        
         if not hit:
             bullets_after_hits.append(b)
-            
     bullets[:] = bullets_after_hits
 
-    # --- Part 2: Enemy-to-Player Collisions ---
     for e in enemies:
-        if e['state'] == 'ALIVE' and math.sqrt((player_pos[0] - e['pos'][0])**2 + (player_pos[2] - e['pos'][2])**2) < 2.0:
-            time_passed = SURVIVAL_TIME_SECONDS - time_remaining
-            damage_dealt = ENEMY_BASE_DAMAGE + (time_passed * ENEMY_DAMAGE_SCALING_FACTOR)
-            
-            player_health -= damage_dealt
-            e['state'] = 'DEAD'
-            e['death_time'] = current_time
-
+        if e['state'] == 'ALIVE' and math.sqrt((player_pos[0] - e['pos'][0])**2 + (player_pos[2] - e['pos'][2])**2) < 2.5:
+            if current_game_time - e.get('last_attack_time', 0) > ENEMY_ATTACK_COOLDOWN:
+                e['last_attack_time'] = current_game_time
+                time_passed_in_game = SURVIVAL_TIME_SECONDS - time_remaining
+                damage_dealt = ENEMY_BASE_DAMAGE + (time_passed_in_game * ENEMY_DAMAGE_SCALING_FACTOR)
+                player_health -= damage_dealt
+                
     items_to_keep = []
     for item in heal_items:
         dist_to_player = math.sqrt((player_pos[0] - item['pos'][0])**2 + (player_pos[2] - item['pos'][2])**2)
         if dist_to_player < 2.0:
-            player_health += HEAL_AMOUNT
-            if player_health > MAX_PLAYER_HEALTH:
-                player_health = MAX_PLAYER_HEALTH
+            player_health = min(MAX_PLAYER_HEALTH, player_health + HEAL_AMOUNT)
         else:
             items_to_keep.append(item)
     heal_items[:] = items_to_keep
@@ -811,12 +1022,8 @@ def check_game_over():
 
 
 def reset_game():
-    # The global player_life has been removed as it's no longer used.
     global player_health, game_score, bullets_missed, is_game_over, player_pos, player_rot_y, bullets, enemies, player_won, time_remaining, game_start_time, last_time, is_boss_spawned, heal_items
-    
-    # --- FIX: Reset player_health to its maximum value ---
     player_health = MAX_PLAYER_HEALTH 
-    
     game_score = 0; 
     bullets_missed = 0; 
     is_game_over = False
@@ -832,7 +1039,9 @@ def reset_game():
             'state': 'ALIVE', 
             'death_time': 0,
             'health': 50.0,
-            'max_health': 50.0
+            'max_health': 50.0,
+            'rot_y': 0.0,
+            'last_attack_time': 0.0
         }
         respawn_enemy(enemy); 
         enemies.append(enemy)
@@ -855,8 +1064,10 @@ def display():
     draw_obstacles() 
     draw_player()
     draw_heal_items()
-    for enemy in enemies: draw_enemy(enemy)
-    for bullet in bullets: draw_bullet(bullet)
+    for enemy in enemies: 
+        draw_enemy(enemy)
+    for bullet in bullets: 
+        draw_bullet(bullet)
         
     draw_hud(); 
     glutSwapBuffers()
@@ -886,13 +1097,14 @@ def keyboard_up(key, x, y):
 
 def mouse_click(button, state, x, y):
     global camera_mode
-    if button == GLUT_LEFT_BUTTON and state == GLUT_DOWN: fire_bullet()
+    if button == GLUT_LEFT_BUTTON and state == GLUT_DOWN: 
+        fire_bullet()
     if button == GLUT_RIGHT_BUTTON and state == GLUT_DOWN: 
         camera_mode = 'FIRST_PERSON' if camera_mode == 'THIRD_PERSON' else 'THIRD_PERSON'
 
 
 def game_loop():
-    global last_time, time_remaining, is_boss_spawned; 
+    global last_time, time_remaining, is_boss_spawned, time_since_last_spawn; 
     if not is_boss_spawned and time_remaining <= (SURVIVAL_TIME_SECONDS / 2):
         spawn_boss()
         is_boss_spawned = True
@@ -908,7 +1120,10 @@ def game_loop():
         update_enemies(dt)
         update_cheat_mode(dt)
         check_collisions()
-    
+        time_since_last_spawn += dt
+        if time_since_last_spawn >= SPAWN_INTERVAL:
+            spawn_new_enemy()
+            time_since_last_spawn -= SPAWN_INTERVAL 
     update_lighting()
     update_camera_smooth(dt)
     check_game_over()
@@ -926,6 +1141,7 @@ def init():
     gluPerspective(45.0, aspect_ratio, 0.1, 500.0)
     glMatrixMode(GL_MODELVIEW)
     glLoadIdentity()
+    generate_ground_patches()
     reset_game()
     angle_rad = math.radians(camera_rot_y)
     cam_x = player_pos[0] + camera_third_person_radius * math.sin(angle_rad)
