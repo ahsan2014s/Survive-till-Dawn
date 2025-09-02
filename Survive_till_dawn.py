@@ -72,6 +72,12 @@ CAMERA_COLLISION_STEP = 0.5
 ENEMY_ATTACK_COOLDOWN = 1.0
 GROUND_PATCHES = []
 ENEMY_COLLISION_RADIUS = 1.5 
+ENEMY_SPEED_SCALING_FACTOR = 0.1
+MAX_AMMO = 30
+current_ammo = MAX_AMMO
+RELOAD_TIME = 2.0
+is_reloading = False
+last_reload_time = 0.0
 OBSTACLES = [
     {
         'type': 'HOUSE', # House
@@ -115,7 +121,7 @@ def draw_player():
     glPushMatrix()
     glTranslatef(player_pos[0], player_pos[1], player_pos[2])
     
-    if is_game_over:
+    if is_game_over and not player_won:
         glRotatef(90, 0, 0, 1)
         
     glRotatef(player_rot_y, 0, 1, 0)
@@ -514,7 +520,11 @@ def draw_hud():
     
     # Text displays for Score and other info
     draw_text(10, window_height - 35, f"Game Score: {game_score}"); 
-    draw_text(10, window_height - 50, f"Player Bullet Missed: {bullets_missed}")
+    if is_reloading:
+        time_left = RELOAD_TIME - (time.perf_counter() - last_reload_time)
+        draw_text(10, window_height - 50, f"Reloading... {max(0, time_left):.1f}s")
+    else:
+        draw_text(10, window_height - 50, f"Ammo: {current_ammo}/{MAX_AMMO}")
     minutes = int(time_remaining) // 60
     seconds = int(time_remaining) % 60
     draw_text(window_width / 2 - 70, window_height - 30, f"Time Remaining: {minutes:02d}:{seconds:02d}")
@@ -574,7 +584,7 @@ def spawn_boss():
     global enemies
     boss = {
         'pos': np.array([0.0, 1.0, 0.0]), 
-        'speed': 1.5, 
+        'base_speed': 1.5, 
         'state': 'ALIVE', 
         'death_time': 0,
         'health': 300.0,
@@ -594,9 +604,11 @@ def draw_heal_items():
 
 
 def fire_bullet():
-    if is_game_over: 
+    global current_ammo
+    if is_game_over or is_reloading or current_ammo <= 0: 
         return
 
+    current_ammo -= 1
     dir_x, dir_z = get_vector_from_angle(player_rot_y)
     right_x = dir_z
     right_z = -dir_x
@@ -663,7 +675,7 @@ def spawn_new_enemy():
     print(f"Spawning new enemy! Total count: {len(enemies) + 1}")
     new_enemy = {
         'pos': np.array([0.0, 1.0, 0.0]), 
-        'speed': random.uniform(2.0, 4.0), 
+        'base_speed': random.uniform(4.0, 7.0), 
         'state': 'ALIVE', 
         'death_time': 0,
         'health': 50.0,
@@ -850,6 +862,8 @@ def update_enemies(dt):
     current_time = time.perf_counter() - game_start_time
     for e in enemies:
         if e['state'] == 'ALIVE' and not is_game_over:
+            time_passed_in_game = SURVIVAL_TIME_SECONDS - time_remaining
+            current_speed = e['base_speed'] + (time_passed_in_game * ENEMY_SPEED_SCALING_FACTOR)
             original_pos = e['pos'].copy()
             enemy_radius = 1.0
             vec_to_player = np.array([player_pos[0], 0, player_pos[2]]) - np.array([e['pos'][0], 0, e['pos'][2]])
@@ -857,7 +871,7 @@ def update_enemies(dt):
             
             if dist_to_player > 1.5:
                 ideal_direction = vec_to_player / dist_to_player
-                move_vector = ideal_direction * e['speed'] * dt
+                move_vector = ideal_direction * current_speed * dt
                 next_pos_ideal = e['pos'] + move_vector
 
                 if not is_position_colliding(next_pos_ideal[0], next_pos_ideal[2], enemy_radius):
@@ -865,12 +879,11 @@ def update_enemies(dt):
                 else:
                     left_probe_dir = np.array([-ideal_direction[2], 0, ideal_direction[0]])
                     right_probe_dir = np.array([ideal_direction[2], 0, -ideal_direction[0]])
-                    next_pos_left = e['pos'] + left_probe_dir * e['speed'] * dt
-                    
+                    next_pos_left = e['pos'] + left_probe_dir * current_speed * dt
                     if not is_position_colliding(next_pos_left[0], next_pos_left[2], enemy_radius):
                         e['pos'] = next_pos_left
                     else:
-                        next_pos_right = e['pos'] + right_probe_dir * e['speed'] * dt
+                        next_pos_right = e['pos'] + right_probe_dir * current_speed * dt
                         if not is_position_colliding(next_pos_right[0], next_pos_right[2], enemy_radius):
                             e['pos'] = next_pos_right
 
@@ -938,7 +951,7 @@ def update_lighting():
         AMBIENT_COLOR = ambient_night
         
     #  Dawn (80% to 100% of the game)
-    else:
+    elif time_of_day_cycle > 0.8:
         factor = (time_of_day_cycle - 0.8) / 0.2
         LIGHT_COLOR = lerp(color_night, color_dawn, factor)
         AMBIENT_COLOR = lerp(ambient_night, ambient_day, factor)
@@ -1022,7 +1035,7 @@ def check_game_over():
 
 
 def reset_game():
-    global player_health, game_score, bullets_missed, is_game_over, player_pos, player_rot_y, bullets, enemies, player_won, time_remaining, game_start_time, last_time, is_boss_spawned, heal_items
+    global player_health, game_score, bullets_missed, is_game_over, player_pos, player_rot_y, bullets, enemies, player_won, time_remaining, game_start_time, last_time, is_boss_spawned, heal_items, is_reloading, current_ammo
     player_health = MAX_PLAYER_HEALTH 
     game_score = 0; 
     bullets_missed = 0; 
@@ -1032,10 +1045,10 @@ def reset_game():
     bullets.clear(); 
     enemies.clear()
     
-    for _ in range(enemy_count):
+    for i in range(enemy_count):
         enemy = {
             'pos': np.array([0.0, 1.0, 0.0]), 
-            'speed': random.uniform(2.0, 4.0), 
+            'base_speed': random.uniform(4.0, 7.0), 
             'state': 'ALIVE', 
             'death_time': 0,
             'health': 50.0,
@@ -1050,6 +1063,8 @@ def reset_game():
     player_won = False
     game_start_time = time.perf_counter()
     last_time = game_start_time
+    current_ammo = MAX_AMMO
+    is_reloading = False
 
     is_boss_spawned = False
     heal_items.clear()
@@ -1074,10 +1089,13 @@ def display():
 
 
 def keyboard_down(key, x, y):
-    global cheat_mode_active, auto_gun_follow_active, is_free_camera_active
+    global cheat_mode_active, auto_gun_follow_active, is_free_camera_active, is_reloading, last_reload_time
     try:
         key_str = key.decode('utf-8').lower()
         key_states[key_str] = True
+        if key_str == 'r' and not is_reloading and current_ammo < MAX_AMMO:
+            is_reloading = True
+            last_reload_time = time.perf_counter()
         if key_str == 'c': 
             cheat_mode_active = not cheat_mode_active
         if key_str == 'v' and cheat_mode_active: 
@@ -1104,7 +1122,7 @@ def mouse_click(button, state, x, y):
 
 
 def game_loop():
-    global last_time, time_remaining, is_boss_spawned, time_since_last_spawn; 
+    global last_time, time_remaining, is_boss_spawned, time_since_last_spawn, is_reloading, current_ammo; 
     if not is_boss_spawned and time_remaining <= (SURVIVAL_TIME_SECONDS / 2):
         spawn_boss()
         is_boss_spawned = True
@@ -1112,7 +1130,10 @@ def game_loop():
     dt = current_time - last_time
     if dt < 1/60.0: return
     last_time = current_time
-    
+    if is_reloading:
+        if time.perf_counter() - last_reload_time >= RELOAD_TIME:
+            current_ammo = MAX_AMMO
+            is_reloading = False 
     if not is_game_over:
         time_remaining -= dt
         update_player(dt)
