@@ -1186,7 +1186,7 @@ def main():
     glutMouseFunc(mouse_click)
     glutIdleFunc(game_loop)
     print("Controls: W/S/A/D (Move), Mouse Left (Fire), Mouse Right (Toggle Camera)")
-    print("K (Toggle Free Camera), C (Toggle Cheat), R (Reset Game)")
+    print("K (Toggle Free Camera), C (Toggle Cheat), R (Reload when alive/Reset Game when dead)")
     glutMainLoop()
 
 if __name__ == "__main__":
