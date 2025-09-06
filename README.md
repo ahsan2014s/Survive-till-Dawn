@@ -16,10 +16,11 @@ python3 Survive_till_dawn.py
 ```
 **If on Linux**:
 ```shell
+sudo apt install git python3-venv
 git clone https://github.com/ahsan2014s/Survive-till-Dawn.git
 cd Survive-till-Dawn
 python3 -m venv .
 source bin/activate
 pip install numpy
-python3 Survive_till_dawn.py
+python3 Survive_till_dawn.py # or you filename instead of "Survive_till_dawn.py"
 ```
